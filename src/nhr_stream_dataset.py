@@ -23,6 +23,30 @@ from src.dataset import resize_no_crop, target_aspect_bucket
 _GIANT_RATE = {"add_remove": 0.122, "remove": 0.350, "add": 0.350}
 
 
+# Photographic NHR styles — used to keep the validation set clean/legible (the dataset also
+# contains illustration/painting/anime/vintage-plate styles that look "deformed" as previews).
+_PHOTO_STYLES = {
+    "standard", "dslr", "photo", "realistic", "realism", "realistic shot", "close-up", "closeup",
+    "drone", "drone still", "portrait", "macro", "snapshot", "wide-angle", "ultra-wide",
+    "panorama", "panoramic", "telephoto", "overhead shot", "overhead view", "aerial", "birds-eye",
+    "low-angle", "middle-distance shot", "documentary photograph", "magazine photograph",
+    "fashion photograph", "casual photograph", "polaroid", "hyperreal", "nighttime", "noir",
+    "fisheye", "cinematic frame",
+}
+
+
+def _is_clean_val(row: dict) -> bool:
+    style = str(row.get("style") or "").strip().lower()
+    if style not in _PHOTO_STYLES:
+        return False
+    w, h = row.get("img_width"), row.get("img_height")
+    if isinstance(w, int) and isinstance(h, int) and w > 0 and h > 0:
+        ar = w / h
+        if ar < 0.6 or ar > 1.7:  # avoid extreme aspect ratios that read as letterboxed
+            return False
+    return True
+
+
 def _accept_prob(category: str | None, target: float) -> float:
     c = (category or "").lower()
     has_add = "add object" in c
@@ -118,9 +142,11 @@ def nhr_fixed_validation(name: str, count: int, height: int, width: int,
     """Stream `count` samples once into memory for a stable validation set."""
     from datasets import load_dataset
 
-    ds = load_dataset(name, split=split, streaming=True).shuffle(seed=seed + 777, buffer_size=max(count * 4, 100))
+    ds = load_dataset(name, split=split, streaming=True).shuffle(seed=seed + 777, buffer_size=max(count * 8, 200))
     items: list = []
     for row in ds:
+        if not _is_clean_val(row):  # keep only clean photographic samples for legible previews
+            continue
         item = _prepare(row, height, width, target_aspect_buckets, bucket_base_resolution, bucket_step)
         if item is not None:
             items.append(item)

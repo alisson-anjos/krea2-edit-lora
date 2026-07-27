@@ -1,0 +1,66 @@
+seed: 42
+output_dir: outputs/cache-smoke
+resume_from: null
+
+model:
+  krea_code_path: vendor/krea-2
+  checkpoint: /home/alissonerdx/.cache/huggingface/hub/models--krea--Krea-2-Raw/snapshots/b2e772263cfa934848fde713159d1553e086778c/raw.safetensors
+  text_encoder: Qwen/Qwen3-VL-4B-Instruct
+  vae: Qwen/Qwen-Image
+  dtype: bf16
+  gradient_checkpointing: true
+  quantization: int8
+  component_offload: true
+
+data:
+  train_manifest: ../dataset/train.jsonl
+  validation_manifest: null
+  cache_dir: ../dataset/cache-krea2-edit-smoke
+  cache_limit: 1
+  width: 1536
+  height: 1024
+  batch_size: 1
+  num_workers: 0
+  max_controls: 1
+  reference_geometry: anchor
+  grounding_max_pixels: 589824
+  instruction_dropout: 0.10
+
+lora:
+  rank: 32
+  alpha: 32
+  dropout: 0.0
+  all_linear: false
+  module_patterns: ["re:^blocks\\.\\d+\\.attn\\.(wq|wk|wv|wo|gate)$"]
+
+optimizer:
+  name: adamw8bit
+  lr: 1.0e-4
+  weight_decay: 0.01
+  betas: [0.9, 0.99]
+  eps: 1.0e-8
+  decouple: true
+  d_coef: 1.0
+
+train:
+  max_steps: 1
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+  save_every: 1
+  sample_every: 100
+  log_every: 1
+
+sampling:
+  steps: 28
+  guidance: 3.5
+  min_res: 256
+  max_res: 1536
+  y1: 0.5
+  y2: 1.15
+  mu: null
+
+wandb:
+  enabled: true
+  project: krea2-edit-lora
+  entity: null
+  run_name: cache-smoke-r32-attn-1536x1024

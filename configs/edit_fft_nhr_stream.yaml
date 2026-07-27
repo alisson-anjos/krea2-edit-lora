@@ -1,0 +1,100 @@
+seed: 42
+output_dir: outputs/krea2-edit-nhr-fft
+resume_from: null
+init_adapter: null
+
+model:
+  krea_code_path: vendor/krea-2
+  checkpoint: models/Krea-2-Raw/raw.safetensors
+  text_encoder: models/Qwen3-VL-4B-Instruct
+  vae: models/Qwen-Image
+  dtype: bf16
+  gradient_checkpointing: true
+  quantization: none
+  component_offload: false
+
+edit_conditioning:
+  reference_timestep: shared
+  reference_timestep_blend: 0.0
+
+data:
+  # streamed directly from the Hub, never downloaded
+  hf_stream_dataset: iitolstykh/NHR-Edit
+  hf_stream_split: train
+  hf_stream_shuffle_buffer: 2000
+  hf_stream_augment_prob: 0.30
+  hf_stream_val_count: 6
+  hf_stream_balance: true
+  hf_stream_balance_target: 0.03
+  cache_dir: null
+  width: 768
+  height: 768
+  target_aspect_buckets: true
+  bucket_base_resolution: 768
+  bucket_step: 16
+  batch_size: 1
+  num_workers: 0
+  max_controls: 1
+  reference_geometry: fit
+  grounding_mode: images
+  grounding_max_pixels: 0
+  grounding_max_side: 512
+  instruction_dropout: 0.10
+  grounding_vision_dropout: 0.10
+  grounding_ref_labels: true
+
+identity_loss:
+  enabled: false
+
+# ignored in full mode, kept for config completeness
+lora:
+  rank: 256
+  alpha: 256
+  dropout: 0.0
+  all_linear: false
+  module_patterns: ["re:^(blocks\\.\\d+|txtfusion\\.(layerwise_blocks|refiner_blocks)\\.\\d+)\\.(attn\\.(wq|wk|wv|wo|gate)|mlp\\.(gate|up|down))$"]
+
+optimizer:
+  name: adafactor
+  lr: 1.0e-5
+  weight_decay: 0.0
+  betas: [0.9, 0.99]
+  eps: 1.0e-8
+  decouple: true
+  d_coef: 1.0
+
+scheduler:
+  name: constant
+
+train:
+  mode: full
+  minimum_vram_gib: 80
+  max_steps: 20000
+  timestep_type: sigmoid
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+  resume_optimizer: false
+  save_optimizer: false
+  save_every: 500
+  keep_last_checkpoints: 1
+  full_checkpoint_shard_gib: 5.0
+  sample_every: 250
+  sample_at_start: true
+  sample_count: 6
+  log_every: 10
+
+sampling:
+  steps: 20
+  guidance: 3.0
+  reference_attention_boost: 1.0
+  min_res: 256
+  max_res: 768
+  y1: 0.5
+  y2: 1.15
+  mu: null
+
+wandb:
+  enabled: true
+  project: krea2-edit-lora
+  entity: null
+  run_name: krea2-edit-nhr-fft

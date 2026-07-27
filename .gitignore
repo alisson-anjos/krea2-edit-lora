@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+# Checkpoints, caches, experiment artifacts, and downloaded adapters/models.
+models/
+weights/
+outputs/
+wandb/
+logs/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+
+# Dataset files belong outside the repository by default.
+../dataset/
+dataset/
+/data/
+
+# Keep the official Krea core as a Git submodule, not vendored files.
+vendor/krea-2/
+private/

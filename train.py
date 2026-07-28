@@ -451,6 +451,28 @@ def make_samples(bundle, validation_dataset, cfg, step: int, output: Path, wandb
                 wandb.Image(str(generated_file)),
             )
         wandb_run.log({"validation/edit_comparison": table, "step": step}, step=step)
+        # Also log ONE composite grid (each row = refs... | generated | target) so every
+        # reference image (e.g. the head/face ref) is unambiguously visible, not buried in a table.
+        try:
+            cell = 288
+            def _cell(p):
+                im = Image.open(str(p)).convert("RGB")
+                return im.resize((max(1, int(im.width * cell / im.height)), cell))
+            grid_rows = []
+            for _, cfs, tf, gf in records:
+                cells = [_cell(c) for c in cfs] + [_cell(gf)] + ([_cell(tf)] if tf else [])
+                row = Image.new("RGB", (sum(c.width for c in cells), cell), (18, 18, 18))
+                x = 0
+                for c in cells:
+                    row.paste(c, (x, 0)); x += c.width
+                grid_rows.append(row)
+            gw = max(r.width for r in grid_rows)
+            grid = Image.new("RGB", (gw, cell * len(grid_rows)), (18, 18, 18))
+            for i, r in enumerate(grid_rows):
+                grid.paste(r, (0, i * cell))
+            wandb_run.log({"validation/grid": wandb.Image(grid, caption="refs | generated | target"), "step": step}, step=step)
+        except Exception as exc:
+            phase("PREVIEW grid failed", error=repr(exc))
         phase("PREVIEW uploaded to W&B", run=wandb_run.url)
     bundle.transformer.train(model_was_training)
     phase("PREVIEW complete", step=step, folder=sample_dir, elapsed=duration(time.monotonic() - started))

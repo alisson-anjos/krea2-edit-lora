@@ -41,7 +41,7 @@ data:
   grounding_max_side: 512
   instruction_dropout: 0.10
   grounding_vision_dropout: 0.10
-  grounding_ref_labels: true
+  grounding_ref_labels: false
 
 identity_loss:
   enabled: false

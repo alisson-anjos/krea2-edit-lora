@@ -236,12 +236,12 @@ def encode_grounded_prompts(
                 _cap_for_vlm(control[row].to(bundle.device), max_pixels, max_side)
                 for control in controls
             ]
-            # Default: ordered vision blocks with no labels (matches comfyui-krea2edit
-            # byte-for-byte). With ref_labels: prefix each block "Image N: " so the
-            # caption's own "image 1 / image 2" references (present in some multi-image edit
-            # captions) bind to a specific reference image -- explicit text<->image
-            # correspondence for multi-reference disambiguation. Inference must use the
-            # same template.
+            # Default: ordered vision blocks with NO labels -- matches the standard
+            # comfyui-krea2edit inference node byte-for-byte, so keep it this way for
+            # ComfyUI compatibility. `ref_labels` prefixes each block "Image N: " for
+            # multi-reference captions that name inputs ("the person in image 1 ..."), but
+            # it DIVERGES from that node's grounding: a LoRA trained with labels under-uses
+            # the source there. Only enable it if inference uses the exact same template.
             if ref_labels:
                 visual_text = "".join(
                     f"Image {i + 1}: <|vision_start|><|image_pad|><|vision_end|> "

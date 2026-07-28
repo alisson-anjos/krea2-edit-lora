@@ -75,8 +75,11 @@ independently-owned model.
   timestep embedding — do **not** use the t=0 / "mixed" scheme; it produces artifacts).
 - `data.grounding_mode: images` (image-grounded instruction through Qwen3-VL — the semantic half of
   the dual conditioning) and `data.reference_geometry: fit`.
-- `data.grounding_ref_labels: true` — prefix each reference vision block with `Image N:` so
-  captions that name their inputs ("the person in image 1 …") bind to the right reference.
+- `data.grounding_ref_labels: false` (default) — keep this OFF for single-image edits. The option
+  prefixes each vision block with `Image N:`, which **diverges from the standard ComfyUI edit node**
+  (it grounds with no labels); a LoRA trained with labels under-uses the source there and generates
+  only the requested object. Turn it on ONLY if you also run a matching inference template, and only
+  for multi-reference data whose captions name inputs ("the person in image 1 …").
 - Keep the training and inference templates identical: same grounding template, same
   `reference_timestep`, same geometry. A mismatch is a common cause of "no effect" at inference.
 

@@ -218,6 +218,7 @@ def encode_grounded_prompts(
     grounding_mode: str = "images",
     max_side: int = 0,
     ref_labels: bool = False,
+    ref_label_word: str = "Image",
 ) -> list[torch.Tensor]:
     """Return one natural-length (L, 12, 2560) Qwen stack per training item."""
     batch = len(captions)
@@ -244,7 +245,7 @@ def encode_grounded_prompts(
             # the source there. Only enable it if inference uses the exact same template.
             if ref_labels:
                 visual_text = "".join(
-                    f"Image {i + 1}: <|vision_start|><|image_pad|><|vision_end|> "
+                    f"{ref_label_word} {i + 1}: <|vision_start|><|image_pad|><|vision_end|> "
                     for i in range(len(images))
                 )
             else:
@@ -551,6 +552,7 @@ def sample_edit(
     refs = [encode_vae(bundle, item.to(bundle.device)) for item in controls]
     grounding_mode = str(getattr(settings, "grounding_mode", "images"))
     ref_labels = bool(getattr(settings, "grounding_ref_labels", False))
+    ref_label_word = str(getattr(settings, "grounding_ref_label_word", "Image"))
     cond_features = encode_grounded_prompts(
         bundle,
         captions,
@@ -559,6 +561,7 @@ def sample_edit(
         grounding_mode,
         int(getattr(settings, "grounding_max_side", 0)),
         ref_labels=ref_labels,
+        ref_label_word=ref_label_word,
     )
     uncond_features = encode_grounded_prompts(
         bundle,
@@ -568,6 +571,7 @@ def sample_edit(
         grounding_mode,
         int(getattr(settings, "grounding_max_side", 0)),
         ref_labels=ref_labels,
+        ref_label_word=ref_label_word,
     )
     cond, cond_mask = pad_context(cond_features, bundle.device, bundle.dtype)
     uncond, uncond_mask = pad_context(uncond_features, bundle.device, bundle.dtype)

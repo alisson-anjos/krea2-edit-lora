@@ -394,6 +394,7 @@ def make_samples(bundle, validation_dataset, cfg, step: int, output: Path, wandb
             "grounding_max_side": int(getattr(cfg.data, "grounding_max_side", 0)),
             "grounding_mode": str(getattr(cfg.data, "grounding_mode", "images")),
             "grounding_ref_labels": bool(getattr(cfg.data, "grounding_ref_labels", False)),
+            "grounding_ref_label_word": str(getattr(cfg.data, "grounding_ref_label_word", "Image")),
         },
     )
     reference_timestep, reference_timestep_blend = edit_conditioning_settings(cfg)
@@ -753,6 +754,7 @@ def main() -> None:
                     step_grounding_mode,
                     int(getattr(cfg.data, "grounding_max_side", 0)),
                     ref_labels=bool(getattr(cfg.data, "grounding_ref_labels", False)),
+                    ref_label_word=str(getattr(cfg.data, "grounding_ref_label_word", "Image")),
                 )
                 context, text_mask = pad_context(text_features, accelerator.device, bundle.dtype)
         noise = torch.randn_like(target_latent)

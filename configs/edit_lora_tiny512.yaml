@@ -1,0 +1,93 @@
+seed: 42
+output_dir: outputs/krea2-edit-tiny512-lora-r256
+resume_from: null
+init_adapter: null   # FROM SCRATCH — the experiment: can Krea 2 learn general editing from ~300 samples?
+
+model:
+  krea_code_path: vendor/krea-2
+  checkpoint: models/Krea-2-Raw/raw.safetensors
+  text_encoder: models/Qwen3-VL-4B-Instruct
+  vae: models/Qwen-Image
+  dtype: bf16
+  gradient_checkpointing: true
+  quantization: none
+  component_offload: false
+
+edit_conditioning:
+  reference_timestep: shared
+  reference_timestep_blend: 0.0
+
+data:
+  local_manifest: /data/datasets/omniedit_tiny512/manifest.jsonl
+  local_val_holdout: 6
+  cache_dir: null
+  width: 512
+  height: 512
+  target_aspect_buckets: true
+  bucket_base_resolution: 512   # small res = fast; AR-preserving buckets
+  bucket_step: 16
+  batch_size: 1
+  num_workers: 4
+  max_controls: 1
+  reference_geometry: fit
+  grounding_mode: images
+  grounding_max_pixels: 0
+  grounding_max_side: 512
+  instruction_dropout: 0.10
+  grounding_vision_dropout: 0.10
+  grounding_ref_labels: false
+
+identity_loss:
+  enabled: false
+
+lora:
+  rank: 256
+  alpha: 256
+  dropout: 0.0
+  all_linear: false
+  module_patterns: ["re:^(blocks\\.\\d+|txtfusion\\.(layerwise_blocks|refiner_blocks)\\.\\d+)\\.(attn\\.(wq|wk|wv|wo|gate)|mlp\\.(gate|up|down))$"]
+
+optimizer:
+  name: adamw8bit
+  lr: 1.0e-4
+  weight_decay: 0.01
+  betas: [0.9, 0.99]
+  eps: 1.0e-8
+  decouple: true
+  d_coef: 1.0
+
+scheduler:
+  name: constant
+
+train:
+  mode: lora
+  minimum_vram_gib: 30
+  max_steps: 4000
+  timestep_type: sigmoid
+  timestep_shift: 0.5   # bias toward HIGH noise -> learn to use the source faster (experiment)
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+  resume_optimizer: false
+  save_optimizer: false
+  save_every: 500
+  keep_last_checkpoints: 2
+  sample_every: 100     # frequent previews — it's fast and we want to catch fast convergence
+  sample_at_start: true
+  sample_count: 6
+  log_every: 10
+
+sampling:
+  steps: 20
+  guidance: 3.0
+  reference_attention_boost: 1.0
+  min_res: 256
+  max_res: 512
+  y1: 0.5
+  y2: 1.15
+  mu: null
+
+wandb:
+  enabled: true
+  project: krea2-edit-lora
+  entity: null
+  run_name: krea2-edit-tiny512-lora-r256

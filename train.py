@@ -33,6 +33,7 @@ from src.dataset import collate_edits, edit_dataset_from_config
 from src.hf_dataset import hf_edit_dataset_from_config
 from src.latent_cache import CachedEditDataset, collate_cached_edits
 from src.nhr_stream_dataset import nhr_stream_from_config
+from src.local_edit_dataset import local_edit_from_config
 from src.krea_edit import (
     decode_vae,
     decode_vae_with_grad,
@@ -529,8 +530,9 @@ def main() -> None:
     cache_dir = getattr(cfg.data, "cache_dir", None)
     hf_dataset = getattr(cfg.data, "hf_dataset", None)
     hf_stream = getattr(cfg.data, "hf_stream_dataset", None)
-    if sum(bool(x) for x in (cache_dir, hf_dataset, hf_stream)) > 1:
-        raise ValueError("Use only one of data.cache_dir, data.hf_dataset, data.hf_stream_dataset")
+    local_manifest = getattr(cfg.data, "local_manifest", None)
+    if sum(bool(x) for x in (cache_dir, hf_dataset, hf_stream, local_manifest)) > 1:
+        raise ValueError("Use only one of data.cache_dir, data.hf_dataset, data.hf_stream_dataset, data.local_manifest")
     identity_cfg = getattr(cfg, "identity_loss", None)
     identity_enabled = bool(getattr(identity_cfg, "enabled", False))
     identity_cache_dir = getattr(identity_cfg, "cache_dir", None) if identity_enabled else None
@@ -568,6 +570,10 @@ def main() -> None:
         train_data = nhr_stream_from_config(cfg, is_validation=False, instruction_dropout=float(cfg.data.instruction_dropout))
         collate_train = collate_edits
         phase("DATA HF stream ready", source=hf_stream, split=str(getattr(cfg.data, "hf_stream_split", "train")), streaming=True, elapsed=duration(time.monotonic() - data_started))
+    elif local_manifest:
+        train_data = local_edit_from_config(cfg, is_validation=False, instruction_dropout=float(cfg.data.instruction_dropout))
+        collate_train = collate_edits
+        phase("DATA local manifest ready", source=local_manifest, examples=len(train_data), elapsed=duration(time.monotonic() - data_started))
     else:
         train_data = edit_dataset_from_config(
             cfg.data.train_manifest,
@@ -588,6 +594,8 @@ def main() -> None:
         )
     elif hf_stream:
         validation_data = nhr_stream_from_config(cfg, is_validation=True, instruction_dropout=0.0)
+    elif local_manifest:
+        validation_data = local_edit_from_config(cfg, is_validation=True, instruction_dropout=0.0)
     else:
         validation_manifest = getattr(cfg.data, "validation_manifest", None)
         validation_data = edit_dataset_from_config(
@@ -749,13 +757,20 @@ def main() -> None:
                 context, text_mask = pad_context(text_features, accelerator.device, bundle.dtype)
         noise = torch.randn_like(target_latent)
         timestep_type = str(getattr(cfg.train, "timestep_type", "uniform")).lower()
+        # timestep_shift biases sampling toward HIGH noise (t->1) when >0. High-noise steps are
+        # where the model must reconstruct the target from noise + conditioning, i.e. where it
+        # learns to USE the source reference / instruction -- useful to accelerate learning the
+        # edit-conditioning on tiny data. Too high hurts fine-detail (low-t) refinement.
+        shift = float(getattr(cfg.train, "timestep_shift", 0.0))
         if timestep_type == "uniform":
             t = torch.rand(target_latent.shape[0], device=accelerator.device, dtype=bundle.dtype)
+            if shift:
+                t = (t + shift).clamp(0.0, 1.0).to(bundle.dtype)
         elif timestep_type == "sigmoid":
             # ai-toolkit's default flow-matching sampler concentrates samples
-            # around the middle of the denoising trajectory.
+            # around the middle of the denoising trajectory; +shift pushes toward high noise.
             t = torch.sigmoid(
-                torch.randn(target_latent.shape[0], device=accelerator.device, dtype=torch.float32)
+                torch.randn(target_latent.shape[0], device=accelerator.device, dtype=torch.float32) + shift
             ).to(bundle.dtype)
         else:
             raise ValueError("train.timestep_type must be uniform or sigmoid")

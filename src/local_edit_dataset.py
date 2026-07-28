@@ -66,7 +66,10 @@ class LocalEditDataset(torch.utils.data.Dataset):
         return len(self.rows)
 
     def _path(self, rel):
-        return str(self.base / rel) if self.base else str(rel)
+        rel = str(rel)
+        if rel.startswith("/"):  # absolute path -> use as-is (lets a mixed manifest span datasets)
+            return rel
+        return str(self.base / rel) if self.base else rel
 
     def _caption(self, r):
         raw = r.get(self.caption_col)
@@ -83,7 +86,11 @@ class LocalEditDataset(torch.utils.data.Dataset):
         h, w = self.height, self.width
         if self.buckets:
             h, w = target_aspect_bucket(*tgt.size, base_resolution=self.base_res, step=self.step)
-        controls = [resize_no_crop(Image.open(self._path(r[c])).convert("RGB"), h, w) for c in self.control_cols]
+        # per-row variable controls: use whichever control columns this row has (in order), so a
+        # single mixed manifest can hold 1-ref edit rows (source) AND 2-ref head-swap rows
+        # (guide, reference). batch_size=1 keeps collate happy with varying control counts.
+        controls = [resize_no_crop(Image.open(self._path(r[c])).convert("RGB"), h, w)
+                    for c in self.control_cols if c in r and r[c]]
         caption = self._caption(r)
         if self.instruction_dropout and random.random() < self.instruction_dropout:
             caption = ""

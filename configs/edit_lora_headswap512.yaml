@@ -19,9 +19,10 @@ edit_conditioning:
   reference_timestep_blend: 0.0
 
 data:
-  local_manifest: /data/datasets/drive_dataset/manifest.jsonl
-  local_base_dir: /data/datasets/drive_dataset
-  local_control_cols: ["guide", "reference"]   # Picture 1 = body/base (frame 1), Picture 2 = face/head (frame 2)
+  # MIXED manifest = head-swap (guide+reference, 2-ref) + tiny OmniEdit edits (source, 1-ref).
+  # Replaying the edit samples alongside head-swap keeps the general-editing knowledge (no forgetting).
+  local_manifest: /data/datasets/headswap_plus_edit_manifest.jsonl
+  local_control_cols: ["guide", "reference", "source"]   # per-row: head-swap uses guide(frame1)+reference(frame2); edit uses source(frame1)
   local_target_col: target
   local_caption_col: instruction
   local_val_holdout: 6

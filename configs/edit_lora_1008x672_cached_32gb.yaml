@@ -16,6 +16,9 @@ model:
 edit_conditioning:
   # shared reproduces the original node; zero protects clean reference tokens
   # from the target noise timestep; blend interpolates between both behaviors.
+  # NOTE: an adapter trained with `zero` REQUIRES integrations/comfyui-krea2edit-t0.patch and
+  # `zero` selected in the model patch node. On stock nodes it behaves as if the reference were
+  # under-weighted, which is hard to self-diagnose from the output alone.
   reference_timestep: zero
   reference_timestep_blend: 1.0
 

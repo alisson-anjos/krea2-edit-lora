@@ -332,7 +332,7 @@ def decode_vae_with_grad(bundle: KreaBundle, latents: torch.Tensor, offload_afte
     return output
 
 
-def _ids(batch: int, frame: int, h: int, w: int, device: torch.device, offset: tuple[int, int] = (0, 0)) -> torch.Tensor:
+def _ids(batch: int, frame: int, h: int, w: int, device: torch.device, offset: tuple[float, float] = (0.0, 0.0)) -> torch.Tensor:
     grid = torch.zeros(h, w, 3, device=device, dtype=torch.float32)
     grid[..., 0] = frame
     grid[..., 1] = torch.arange(h, device=device, dtype=torch.float32)[:, None] + offset[0]
@@ -451,7 +451,13 @@ def predict_velocity_edit(
         if control.shape[0] != batch:
             raise ValueError("Reference batch does not match target batch")
         grid_h, grid_w = control.shape[-2] // patch, control.shape[-1] // patch
-        offset = ((target_h - grid_h) // 2, (target_w - grid_w) // 2) if reference_geometry == "fit" else (0, 0)
+        # Fractional center (comfyui-krea2edit v1.2.4): integer floor put odd-gap references half
+        # a token off their true center. RoPE positions are continuous, so half-token is exact.
+        offset = (
+            (max(0.0, (target_h - grid_h) / 2), max(0.0, (target_w - grid_w) / 2))
+            if reference_geometry == "fit"
+            else (0.0, 0.0)
+        )
         source_tokens.append(_patchify(model, control))
         source_positions.append(_ids(batch, index, grid_h, grid_w, noisy_target.device, offset))
     source = torch.cat(source_tokens, dim=1)

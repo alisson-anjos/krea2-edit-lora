@@ -102,14 +102,61 @@ def target_aspect_bucket(
     return height, width
 
 
-def fit_reference(image: Image.Image, height: int, width: int) -> torch.Tensor:
-    """The v1.2 `fit` geometry: fit inside target, snap to 16 px, no latent resize."""
+def fit_reference(image: Image.Image, height: int, width: int, crop_tol: float = 0.0) -> torch.Tensor:
+    """The v1.2 `fit` geometry: fit inside target, snap to 16 px, no latent resize.
+
+    `crop_tol` mirrors the ComfyUI node's near-matched-AR branch (CROP_TOL 0.08): when the
+    fit-inside margins are within tolerance, the node instead takes a minimal center-crop so the
+    reference fills the target grid exactly (fit-inside margins of 1-2 tokens make target edge
+    columns with no reference correspondence repeat adjacent content). Pass the node's value so
+    training and inference geometry stay byte-identical; 0.0 keeps the plain fit-inside behaviour.
+    """
     source_w, source_h = image.size
     scale = min(width / source_w, height / source_h)
+    if crop_tol > 0.0 and source_h * scale >= height * (1 - crop_tol) and source_w * scale >= width * (1 - crop_tol):
+        fill = max(width / source_w, height / source_h)
+        crop_h = min(source_h, int(round(height / fill)))
+        crop_w = min(source_w, int(round(width / fill)))
+        top, left = (source_h - crop_h) // 2, (source_w - crop_w) // 2
+        image = image.crop((left, top, left + crop_w, top + crop_h))
+        return pil_to_tensor(image.resize((width, height), Image.Resampling.LANCZOS))
     out_h = min(max(16, int(source_h * scale) // 16 * 16), height // 16 * 16)
     out_w = min(max(16, int(source_w * scale) // 16 * 16), width // 16 * 16)
+    # CROP-TO-GRID (comfyui-krea2edit v1.2.4): resizing source*scale straight to the floor-16 size
+    # SQUASHES the content by up to 15 px. The misregistration peaks at the reference band edges
+    # and shows up as a doubled band on vertical outpaints. Crop the source so the fitted axis
+    # lands on the /16 grid at exactly `scale` instead.
+    crop_h = min(source_h, max(1, int(round(out_h / scale))))
+    crop_w = min(source_w, max(1, int(round(out_w / scale))))
+    top, left = (source_h - crop_h) // 2, (source_w - crop_w) // 2
+    image = image.crop((left, top, left + crop_w, top + crop_h))
     image = image.resize((out_w, out_h), Image.Resampling.LANCZOS)
     return pil_to_tensor(image)
+
+
+def pad_reference(
+    image: Image.Image,
+    height: int,
+    width: int,
+    pad_color: tuple[int, int, int] = (128, 128, 128),
+) -> torch.Tensor:
+    """Same-size `pad` geometry: AR-preserving fit-inside, then pad to the EXACT target grid.
+
+    Every reference ends up the same size as the target (and as every other reference), which
+    `fit` does not guarantee, while no pixel is stretched or cropped away -- the face keeps its
+    proportions and its full extent. The ComfyUI node must run the identical math (fit_mode
+    "pad"), or the model sees a different reference geometry at inference than it trained on.
+    """
+    source_w, source_h = image.size
+    scale = min(width / source_w, height / source_h)
+    inner_h = max(1, min(height, int(round(source_h * scale))))
+    inner_w = max(1, min(width, int(round(source_w * scale))))
+    canvas = Image.new("RGB", (width, height), tuple(pad_color))
+    canvas.paste(
+        image.resize((inner_w, inner_h), Image.Resampling.LANCZOS),
+        ((width - inner_w) // 2, (height - inner_h) // 2),
+    )
+    return pil_to_tensor(canvas)
 
 
 class EditDataset(Dataset):

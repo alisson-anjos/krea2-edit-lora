@@ -298,6 +298,12 @@ Restart ComfyUI and select `zero` in the model patch node. Keep `ref_boost=1.0` 
 
 Use the same `anchor` or `fit` reference geometry as training. The supplied profile uses `anchor`. Krea 2 Raw previews use 52 steps and CFG 3.5.
 
+## Credits
+
+This trainer's edit conditioning was reconstructed from [comfyui-krea2edit](https://github.com/lbouaraba/comfyui-krea2edit) by [@lbouaraba](https://github.com/lbouaraba). Its nodes are the reference implementation of the layout this repository trains against — `[text | references (RoPE frames 1..N) | target (frame 0)]`, the shared reference timestep, and the image-grounded Qwen instruction encode — and reading them is what made a matching trainer possible.
+
+The reference geometry follows the node pack release for release, because training and inference must agree byte for byte or the adapter under-uses the source. Two fixes from v1.2.4 are mirrored here: the fitted axis is reached by cropping the source so it lands on the /16 grid at exact scale (resizing straight to the floor-16 size squashes content by up to 15 px and doubles the band at the reference edges), and centered reference offsets are fractional rather than integer-floored, since RoPE positions are continuous.
+
 ## Safety and licensing
 
 Use only images you are authorized to process. Respect consent, privacy, likeness, copyright, the Krea 2 license, and the licenses of optional identity models. Model caches, outputs, W&B data, and `.safetensors` weights are excluded from Git.

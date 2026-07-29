@@ -436,43 +436,34 @@ def make_samples(bundle, validation_dataset, cfg, step: int, output: Path, wandb
         phase("PREVIEW image saved", path=file, elapsed=duration(time.monotonic() - item_started))
     if wandb_run is not None:
         import wandb
-        control_count = max(len(control_files) for _, control_files, _, _ in records)
-        control_columns = [f"control_{index + 1}" for index in range(control_count)]
-        table = wandb.Table(columns=["caption", *control_columns, "target", "generated"])
+        cell = 288
+
+        def _cell(path):
+            image = Image.open(str(path)).convert("RGB")
+            return image.resize((max(1, int(image.width * cell / image.height)), cell))
+
+        def _strip(paths):
+            """Compose images side by side into ONE picture at a common height."""
+            cells = [_cell(path) for path in paths]
+            strip = Image.new("RGB", (sum(c.width for c in cells), cell), (18, 18, 18))
+            x = 0
+            for c in cells:
+                strip.paste(c, (x, 0))
+                x += c.width
+            return strip
+
+        # One `references` column holding every reference for the row, not one column per
+        # control: a second control column would add a whole extra W&B panel and leave the
+        # 1-reference edit rows with an empty cell.
+        table = wandb.Table(columns=["caption", "references", "target", "generated"])
         for caption, control_files, target_file, generated_file in records:
-            controls_for_table = [
-                wandb.Image(str(control_files[index])) if index < len(control_files) else None
-                for index in range(control_count)
-            ]
             table.add_data(
                 caption,
-                *controls_for_table,
+                wandb.Image(_strip(control_files), caption=f"{len(control_files)} ref(s)"),
                 wandb.Image(str(target_file)) if target_file else None,
                 wandb.Image(str(generated_file)),
             )
         wandb_run.log({"validation/edit_comparison": table, "step": step}, step=step)
-        # Also log ONE composite grid (each row = refs... | generated | target) so every
-        # reference image (e.g. the head/face ref) is unambiguously visible, not buried in a table.
-        try:
-            cell = 288
-            def _cell(p):
-                im = Image.open(str(p)).convert("RGB")
-                return im.resize((max(1, int(im.width * cell / im.height)), cell))
-            grid_rows = []
-            for _, cfs, tf, gf in records:
-                cells = [_cell(c) for c in cfs] + [_cell(gf)] + ([_cell(tf)] if tf else [])
-                row = Image.new("RGB", (sum(c.width for c in cells), cell), (18, 18, 18))
-                x = 0
-                for c in cells:
-                    row.paste(c, (x, 0)); x += c.width
-                grid_rows.append(row)
-            gw = max(r.width for r in grid_rows)
-            grid = Image.new("RGB", (gw, cell * len(grid_rows)), (18, 18, 18))
-            for i, r in enumerate(grid_rows):
-                grid.paste(r, (0, i * cell))
-            wandb_run.log({"validation/grid": wandb.Image(grid, caption="refs | generated | target"), "step": step}, step=step)
-        except Exception as exc:
-            phase("PREVIEW grid failed", error=repr(exc))
         phase("PREVIEW uploaded to W&B", run=wandb_run.url)
     bundle.transformer.train(model_was_training)
     phase("PREVIEW complete", step=step, folder=sample_dir, elapsed=duration(time.monotonic() - started))

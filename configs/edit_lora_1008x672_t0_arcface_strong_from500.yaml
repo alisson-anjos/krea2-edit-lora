@@ -14,6 +14,8 @@ model:
   component_offload: true
 
 edit_conditioning:
+  # NOTE: an adapter trained with `zero` REQUIRES integrations/comfyui-krea2edit-t0.patch and
+  # `zero` selected in the model patch node; on stock nodes the reference looks under-weighted.
   reference_timestep: zero
   reference_timestep_blend: 1.0
 

@@ -8,7 +8,13 @@ multi-ref (e.g. head-swap: guide + reference -> target). Config-driven columns:
 - data.local_caption_col : caption column (default "instruction")
 - data.local_caption_json_key : if set, the caption cell is a JSON string and this dotted key
   is extracted from it (e.g. "edit.instruction").
-Images are resize_no_crop'd to the target's AR bucket. Yields the collate_edits dict.
+Geometry (must match the ComfyUI node's fit_mode): data.reference_geometry selects how a reference
+is brought to the target grid -- `pad` (AR-preserving fit-inside then padded to the exact target
+size, so every reference is the same size), `fit` (AR-preserving, smaller grid placed at a centered
+RoPE offset) or `anchor` (center-crop to the target AR). data.local_align_first_control keeps
+control 0 (the head-swap body / the edit source, which is framed like the target) on the full target
+grid instead; set it false to run every control through the same geometry. Yields the collate_edits
+dict.
 """
 from __future__ import annotations
 
@@ -19,7 +25,13 @@ from pathlib import Path
 import torch
 from PIL import Image
 
-from src.dataset import resize_no_crop, target_aspect_bucket
+from src.dataset import (
+    center_crop_resize,
+    fit_reference,
+    pad_reference,
+    resize_no_crop,
+    target_aspect_bucket,
+)
 
 
 def _load_manifest(path: str) -> list:
@@ -43,7 +55,9 @@ class LocalEditDataset(torch.utils.data.Dataset):
     def __init__(self, manifest, height, width, control_cols=("source",), target_col="target",
                  caption_col="instruction", caption_json_key=None, base_dir=None,
                  target_aspect_buckets=True, bucket_base_resolution=512, bucket_step=16,
-                 instruction_dropout=0.0, val_holdout=0, is_validation=False, seed=42):
+                 instruction_dropout=0.0, val_holdout=0, is_validation=False, seed=42,
+                 reference_geometry="fit", align_first_control=True, fit_crop_tol=0.08,
+                 pad_color=(128, 128, 128)):
         rows = _load_manifest(manifest)
         rng = random.Random(seed)
         rng.shuffle(rows)
@@ -61,6 +75,12 @@ class LocalEditDataset(torch.utils.data.Dataset):
         self.base_res = int(bucket_base_resolution)
         self.step = int(bucket_step)
         self.instruction_dropout = float(instruction_dropout)
+        if reference_geometry not in {"anchor", "fit", "pad"}:
+            raise ValueError("reference_geometry must be anchor, fit or pad")
+        self.reference_geometry = str(reference_geometry)
+        self.align_first_control = bool(align_first_control)
+        self.fit_crop_tol = float(fit_crop_tol)
+        self.pad_color = tuple(int(v) for v in pad_color)
 
     def __len__(self):
         return len(self.rows)
@@ -89,8 +109,21 @@ class LocalEditDataset(torch.utils.data.Dataset):
         # per-row variable controls: use whichever control columns this row has (in order), so a
         # single mixed manifest can hold 1-ref edit rows (source) AND 2-ref head-swap rows
         # (guide, reference). batch_size=1 keeps collate happy with varying control counts.
-        controls = [resize_no_crop(Image.open(self._path(r[c])).convert("RGB"), h, w)
-                    for c in self.control_cols if c in r and r[c]]
+        controls = []
+        for position, column in enumerate(c for c in self.control_cols if c in r and r[c]):
+            image = Image.open(self._path(r[column])).convert("RGB")
+            if position == 0 and self.align_first_control:
+                # frame 1 is the base (head-swap body / edit source): same framing as the target,
+                # so it keeps the full target grid. Stretching it is harmless and stays aligned.
+                controls.append(resize_no_crop(image, h, w))
+            elif self.reference_geometry == "anchor":
+                controls.append(center_crop_resize(image, h, w))
+            elif self.reference_geometry == "pad":
+                # Every reference the same size as the target, without stretching or cropping.
+                controls.append(pad_reference(image, h, w, self.pad_color))
+            else:
+                # NEVER stretch a free-standing reference: a squashed face is a different face.
+                controls.append(fit_reference(image, h, w, crop_tol=self.fit_crop_tol))
         caption = self._caption(r)
         if self.instruction_dropout and random.random() < self.instruction_dropout:
             caption = ""
@@ -118,4 +151,8 @@ def local_edit_from_config(cfg, is_validation=False, instruction_dropout=0.0):
         instruction_dropout=instruction_dropout,
         val_holdout=int(getattr(d, "local_val_holdout", 8)),
         is_validation=is_validation, seed=int(getattr(cfg, "seed", 42)),
+        reference_geometry=str(getattr(d, "reference_geometry", "fit")),
+        align_first_control=bool(getattr(d, "local_align_first_control", True)),
+        fit_crop_tol=float(getattr(d, "reference_fit_crop_tol", 0.08)),
+        pad_color=tuple(getattr(d, "reference_pad_color", (128, 128, 128))),
     )

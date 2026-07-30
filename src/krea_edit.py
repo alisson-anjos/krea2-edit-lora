@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import random
 import sys
 import logging
 import time
@@ -194,14 +195,21 @@ def ensure_vae(bundle: KreaBundle, cfg) -> None:
         )
 
 
-def _cap_for_vlm(image: torch.Tensor, max_pixels: int, max_side: int = 0) -> torch.Tensor:
-    """Downscale only; image detail is retained through the VAE path."""
+def _cap_for_vlm(image: torch.Tensor, max_pixels: int, max_side: int = 0, jitter_min: int = 0) -> torch.Tensor:
+    """Downscale only; image detail is retained through the VAE path.
+
+    `jitter_min` reproduces the krea2edit-trainer recipe: with a cap set, draw the cap per call
+    from uniform[jitter_min, max_side] so the LoRA sees the grounding description at many
+    granularities and inference may ground at any resolution without a train/infer mismatch.
+    It is a per-step augmentation, so grounded text embeddings must never be cached.
+    """
     h, w = image.shape[-2:]
     scales = [1.0]
     if max_pixels > 0:
         scales.append(math.sqrt(max_pixels / (h * w)))
     if max_side > 0:
-        scales.append(max_side / max(h, w))
+        cap = random.randint(jitter_min, max_side) if 0 < jitter_min < max_side else max_side
+        scales.append(cap / max(h, w))
     scale = min(scales)
     if scale == 1.0:
         return image
@@ -218,6 +226,7 @@ def encode_grounded_prompts(
     grounding_mode: str = "images",
     max_side: int = 0,
     ref_labels: bool = False,
+    jitter_min: int = 0,
     ref_label_word: str = "Image",
 ) -> list[torch.Tensor]:
     """Return one natural-length (L, 12, 2560) Qwen stack per training item."""
@@ -225,7 +234,12 @@ def encode_grounded_prompts(
     grounding_mode = str(grounding_mode).lower()
     if grounding_mode not in {"images", "text_only"}:
         raise ValueError("grounding_mode must be images or text_only")
-    if grounding_mode == "images" and any(control.shape[0] != batch for control in controls):
+    # A grounding entry may be a stacked (B,C,H,W) tensor or, when the images keep their native
+    # framing and therefore differ in size, a plain per-item list. Both index the same way.
+    def _batch_size(entry):
+        return entry.shape[0] if torch.is_tensor(entry) else len(entry)
+
+    if grounding_mode == "images" and any(_batch_size(control) != batch for control in controls):
         raise ValueError("controls and captions have inconsistent batch sizes")
     if bundle.qwen is None or bundle.vl_processor is None or bundle.suffix_processor is None:
         raise RuntimeError("Qwen conditioning is not loaded. Call ensure_conditioning first.")
@@ -234,7 +248,7 @@ def encode_grounded_prompts(
     for row, caption in enumerate(captions):
         if grounding_mode == "images":
             images = [
-                _cap_for_vlm(control[row].to(bundle.device), max_pixels, max_side)
+                _cap_for_vlm(control[row].to(bundle.device), max_pixels, max_side, jitter_min)
                 for control in controls
             ]
             # Default: ordered vision blocks with NO labels -- matches the standard
@@ -551,6 +565,7 @@ def sample_edit(
     reference_timestep: str = "shared",
     reference_timestep_blend: float = 1.0,
     reference_attention_boost: float = 1.0,
+    grounding: list[torch.Tensor] | None = None,
 ) -> torch.Tensor:
     target_h, target_w = controls[0].shape[-2], controls[0].shape[-1]
     generator = torch.Generator(device=bundle.device).manual_seed(seed)
@@ -559,10 +574,11 @@ def sample_edit(
     grounding_mode = str(getattr(settings, "grounding_mode", "images"))
     ref_labels = bool(getattr(settings, "grounding_ref_labels", False))
     ref_label_word = str(getattr(settings, "grounding_ref_label_word", "Image"))
+    grounding_images = grounding if grounding is not None else controls
     cond_features = encode_grounded_prompts(
         bundle,
         captions,
-        controls,
+        grounding_images,
         settings.grounding_max_pixels,
         grounding_mode,
         int(getattr(settings, "grounding_max_side", 0)),
@@ -572,7 +588,7 @@ def sample_edit(
     uncond_features = encode_grounded_prompts(
         bundle,
         [""] * len(captions),
-        controls,
+        grounding_images,
         settings.grounding_max_pixels,
         grounding_mode,
         int(getattr(settings, "grounding_max_side", 0)),

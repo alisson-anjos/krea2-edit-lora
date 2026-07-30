@@ -267,12 +267,19 @@ def collate_edits(items: list[dict[str, Any]]) -> dict[str, Any]:
     # `fit` may have source tensors of different shape. Keep them as a list; trainer
     # enforces batch_size=1 for that mode.
     controls = [torch.stack([sample[i] for sample in controls_per_item]) for i in range(control_count)]
+    if "grounding" in items[0]:
+        # Native-aspect reference images for the VLM branch, kept separate from the fitted
+        # control tensors the DiT consumes: the grounding branch is semantic and wants the
+        # untouched framing, not the target-grid geometry.
+        result_grounding = [[item["grounding"][i] for item in items] for i in range(control_count)]
     result = {
         "ids": [item["id"] for item in items],
         "captions": [item["caption"] for item in items],
         "controls": controls,
         "raw": [item["raw"] for item in items],
     }
+    if "grounding" in items[0]:
+        result["grounding"] = result_grounding
     if "target" in items[0]:
         result["target"] = torch.stack([item["target"] for item in items])
     return result

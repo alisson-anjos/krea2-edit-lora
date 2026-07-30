@@ -47,10 +47,14 @@ from src.krea_edit import (
     sample_edit,
 )
 from src.identity import arcface_identity_loss, crop_identity_latent, load_arcface
+from src.timestep_weighting import default_weighing_scheme
 from src.lora import export_comfy_lora, inject_lora, lora_parameters, quantize_frozen_bases
 
 
 LOG = logging.getLogger("krea2edit")
+
+# Per-timestep loss weights for train.timestep_type: "weighted" (index 0 = noisiest step).
+timestep_weights = torch.tensor(default_weighing_scheme, dtype=torch.float32)
 
 
 def configure_logging() -> None:
@@ -418,6 +422,7 @@ def make_samples(bundle, validation_dataset, cfg, step: int, output: Path, wandb
             reference_timestep,
             reference_timestep_blend,
             reference_attention_boost,
+            grounding=[g.unsqueeze(0).to(bundle.device) for g in item["grounding"]] if "grounding" in item else None,
         )[0]
         file = sample_dir / f"{index:02d}-{item['id']}.png"
         tensor_to_pil(image).save(file)
@@ -762,12 +767,13 @@ def main() -> None:
                 text_features = encode_grounded_prompts(
                     bundle,
                     batch["captions"],
-                    controls,
+                    batch.get("grounding") or controls,
                     cfg.data.grounding_max_pixels,
                     step_grounding_mode,
                     int(getattr(cfg.data, "grounding_max_side", 0)),
                     ref_labels=bool(getattr(cfg.data, "grounding_ref_labels", False)),
                     ref_label_word=str(getattr(cfg.data, "grounding_ref_label_word", "Image")),
+                    jitter_min=int(getattr(cfg.data, "grounding_jitter_min", 0)),
                 )
                 context, text_mask = pad_context(text_features, accelerator.device, bundle.dtype)
         noise = torch.randn_like(target_latent)
@@ -787,8 +793,20 @@ def main() -> None:
             t = torch.sigmoid(
                 torch.randn(target_latent.shape[0], device=accelerator.device, dtype=torch.float32) + shift
             ).to(bundle.dtype)
+        elif timestep_type == "weighted":
+            # krea2edit-trainer's recipe: sample the timestep UNIFORMLY on the 1000-step grid and
+            # weight the loss per timestep instead of biasing the sampler. The table emphasises the
+            # high-noise band, where the model decides composition and which reference to copy from,
+            # and de-emphasises low-noise refinement -- the opposite end from `sigmoid`, which piles
+            # samples in the middle.
+            # The table is indexed like ai-toolkit's linspace(1000, 1) grid: index 0 is the NOISIEST
+            # step, so the normalised t runs backwards against the index.
+            count = timestep_weights.shape[0]
+            step_index = torch.randint(0, count, (target_latent.shape[0],), device=accelerator.device)
+            t = (1.0 - (step_index.float() + 0.5) / count).to(bundle.dtype)
+            timestep_weight = timestep_weights.to(accelerator.device)[step_index].float()
         else:
-            raise ValueError("train.timestep_type must be uniform or sigmoid")
+            raise ValueError("train.timestep_type must be uniform, sigmoid or weighted")
         noisy = (1 - t[:, None, None, None]) * target_latent + t[:, None, None, None] * noise
         velocity_target = noise - target_latent
         prediction = predict_velocity_edit(
@@ -803,7 +821,11 @@ def main() -> None:
             reference_timestep,
             reference_timestep_blend,
         )
-        flow_loss = F.mse_loss(prediction.float(), velocity_target.float())
+        if timestep_weight is None:
+            flow_loss = F.mse_loss(prediction.float(), velocity_target.float())
+        else:
+            per_sample = (prediction.float() - velocity_target.float()).pow(2).mean(dim=(1, 2, 3))
+            flow_loss = (per_sample * timestep_weight).mean()
         identity_loss_value = None
         identity_similarity = None
         identity_applied = False

@@ -27,11 +27,20 @@ from PIL import Image
 
 from src.dataset import (
     center_crop_resize,
+    pil_to_tensor,
     fit_reference,
     pad_reference,
     resize_no_crop,
     target_aspect_bucket,
 )
+
+
+def _downscale(image: Image.Image, max_side: int):
+    if max_side > 0 and max(image.size) > max_side:
+        scale = max_side / max(image.size)
+        image = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))),
+                             Image.Resampling.LANCZOS)
+    return pil_to_tensor(image)
 
 
 def _load_manifest(path: str) -> list:
@@ -57,7 +66,7 @@ class LocalEditDataset(torch.utils.data.Dataset):
                  target_aspect_buckets=True, bucket_base_resolution=512, bucket_step=16,
                  instruction_dropout=0.0, val_holdout=0, is_validation=False, seed=42,
                  reference_geometry="fit", align_first_control=True, fit_crop_tol=0.08,
-                 pad_color=(128, 128, 128)):
+                 pad_color=(128, 128, 128), grounding_max_side=1024):
         rows = _load_manifest(manifest)
         rng = random.Random(seed)
         rng.shuffle(rows)
@@ -81,6 +90,7 @@ class LocalEditDataset(torch.utils.data.Dataset):
         self.align_first_control = bool(align_first_control)
         self.fit_crop_tol = float(fit_crop_tol)
         self.pad_color = tuple(int(v) for v in pad_color)
+        self.grounding_max_side = int(grounding_max_side)
 
     def __len__(self):
         return len(self.rows)
@@ -109,9 +119,13 @@ class LocalEditDataset(torch.utils.data.Dataset):
         # per-row variable controls: use whichever control columns this row has (in order), so a
         # single mixed manifest can hold 1-ref edit rows (source) AND 2-ref head-swap rows
         # (guide, reference). batch_size=1 keeps collate happy with varying control counts.
-        controls = []
+        controls, grounding = [], []
         for position, column in enumerate(c for c in self.control_cols if c in r and r[c]):
             image = Image.open(self._path(r[column])).convert("RGB")
+            # The VLM branch gets the reference in its OWN framing, only downscaled -- it is a
+            # semantic channel, and feeding it the target-grid geometry would describe a crop the
+            # user never supplies at inference. Fine detail still reaches the DiT via the VAE path.
+            grounding.append(_downscale(image, self.grounding_max_side))
             if position == 0 and self.align_first_control:
                 # frame 1 is the base (head-swap body / edit source): same framing as the target,
                 # so it keeps the full target grid. Stretching it is harmless and stays aligned.
@@ -130,6 +144,7 @@ class LocalEditDataset(torch.utils.data.Dataset):
         return {
             "id": str(r.get("id", index)),
             "controls": controls,
+            "grounding": grounding,
             "target": resize_no_crop(tgt, h, w),
             "caption": caption,
             "raw": {"dataset": "local", "category": r.get("task"), "reference_count": len(controls)},
@@ -155,4 +170,5 @@ def local_edit_from_config(cfg, is_validation=False, instruction_dropout=0.0):
         align_first_control=bool(getattr(d, "local_align_first_control", True)),
         fit_crop_tol=float(getattr(d, "reference_fit_crop_tol", 0.08)),
         pad_color=tuple(getattr(d, "reference_pad_color", (128, 128, 128))),
+        grounding_max_side=int(getattr(d, "grounding_native_max_side", 1024)),
     )
